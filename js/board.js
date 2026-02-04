@@ -289,8 +289,38 @@ class Board {
         return contributions;
     }
 
-    // Calculate critical path - trace row by row from top to bottom
-    // Each row gives +1 credit to the piece occupying that position
+    // Find critical (load-bearing) pieces by iteratively pruning non-critical ones
+    findCriticalPieces() {
+        let workingBoard = this.clone();
+        const criticalPieces = new Set(this.getPieceIds());
+
+        let changed = true;
+        while (changed) {
+            changed = false;
+            const originalHeight = workingBoard.getHeight();
+
+            for (const pieceId of [...criticalPieces]) {
+                const testBoard = workingBoard.clone();
+                testBoard.removePiece(pieceId);
+                testBoard.applyGravity();
+
+                if (testBoard.getHeight() === originalHeight) {
+                    // Not load-bearing - permanently remove
+                    workingBoard.removePiece(pieceId);
+                    workingBoard.applyGravity();
+                    criticalPieces.delete(pieceId);
+                    changed = true;
+                    break; // Restart since board state changed
+                }
+            }
+        }
+
+        return criticalPieces;
+    }
+
+    // Calculate critical path - sequential removal attribution
+    // Removes critical pieces bottom-to-top, crediting each for height drop
+    // This guarantees sum of contributions = original tower height
     calculateCriticalPath() {
         const contributions = new Map();
         for (const id of this.getPieceIds()) {
@@ -300,36 +330,34 @@ class Board {
         const height = this.getHeight();
         if (height === 0) return contributions;
 
-        // Find starting position (leftmost cell at highest row)
-        const maxY = height - 1;
-        let currentX = 0;
-        for (let x = 0; x < this.width; x++) {
-            if (this.grid[maxY][x]) {
-                currentX = x;
-                break;
+        // Phase 1: Find critical pieces
+        const criticalPieces = this.findCriticalPieces();
+
+        // Phase 2: Sort critical pieces by lowest row (bottom-up)
+        const sortedCritical = [...criticalPieces].sort((a, b) => {
+            const pieceA = this.pieces.get(a);
+            const pieceB = this.pieces.get(b);
+            const minYA = Math.min(...pieceA.cells.map(c => c.y));
+            const minYB = Math.min(...pieceB.cells.map(c => c.y));
+            return minYA - minYB;
+        });
+
+        // Phase 3: Remove pieces sequentially, tracking height drops
+        let workingBoard = this.clone();
+        // First remove all non-critical pieces
+        for (const pieceId of this.getPieceIds()) {
+            if (!criticalPieces.has(pieceId)) {
+                workingBoard.removePiece(pieceId);
             }
         }
+        workingBoard.applyGravity();
 
-        // Trace down row by row from top to bottom
-        for (let y = maxY; y >= 0; y--) {
-            let cell = this.grid[y][currentX];
-
-            // If no cell at currentX, find the leftmost cell in this row
-            if (!cell) {
-                for (let x = 0; x < this.width; x++) {
-                    if (this.grid[y][x]) {
-                        currentX = x;
-                        cell = this.grid[y][x];
-                        break;
-                    }
-                }
-            }
-
-            if (cell) {
-                // Credit this row to the piece
-                const current = contributions.get(cell.pieceId) || 0;
-                contributions.set(cell.pieceId, current + 1);
-            }
+        for (const pieceId of sortedCritical) {
+            const heightBefore = workingBoard.getHeight();
+            workingBoard.removePiece(pieceId);
+            workingBoard.applyGravity();
+            const heightAfter = workingBoard.getHeight();
+            contributions.set(pieceId, heightBefore - heightAfter);
         }
 
         return contributions;
